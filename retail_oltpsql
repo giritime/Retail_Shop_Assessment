@@ -1,0 +1,138 @@
+--sequences
+create sequence shop_seq;
+create sequence seq_payment_method;
+create sequence seq_date_id;
+create sequence seq_pay_id;
+----------------------------------------------------------------------------------
+--shop_dimension
+create or replace procedure sp_oltp as
+cursor c_shop is
+select shop_id,shop_name,city_name,state_name,country_name,city_type,crt_date
+from shop_outlet_r a,city_r b,state_r s,country_r c,city_type_r d
+where a.city_id=b.city_id and b.state_id=s.state_id and s.country_id=c.country_id
+and b.city_type_id=d.city_type_id and a.crt_date>(select cr_dt
+from src_created_dates
+where src_name='shop_src');
+v_shop_id number(10);
+v_count number(5);
+begin
+for i in c_shop loop
+    begin
+    select shop_sur_id into v_shop_id
+    from shop_dimension
+    where shop_src_id=i.shop_id and shop_nm=i.shop_name and city_nm=i.city_name
+    and city_type=i.city_type and state_nm=i.state_name and country_nm=i.country_name;
+    exception
+    when no_data_found then
+        begin
+        select count(*)into v_count
+        from shop_dimension
+        where shop_src_id=i.shop_id;
+        if v_count=0 then
+        insert into shop_dimension values(shop_seq.nextval,i.shop_id,i.shop_name,i.city_name,i.city_type,
+        i.state_name,i.country_name,sysdate);
+        update src_created_dates set cr_dt=i.crt_date
+        where src_name='shop src';
+        else
+        update shop_dimension set shop_src_id=i.shop_id,shop_nm=i.shop_name,city_nm=i.city_name,city_type=i.city_type,
+        state_nm=i.state_name,country_nm=i.country_name,crnt_dt=sysdate;
+        update src_created_dates set cr_dt=i.crt_date
+        where src_name='shop src';
+        end if;
+        end;
+    end;
+end loop;
+end;
+ 
+exec sp_oltp;   
+--------------------------------------------------------------------------------------
+--payment_method_dimension
+create or replace procedure sp_payment as
+cursor c_pay is
+select payment_method_id ,payment_method_name,crt_date
+from payment_method_r 
+where crt_date>(select cr_dt
+from src_created_dates
+where src_name='pay_method_src');
+v_payment_method_id number(10);
+
+begin
+for i in c_pay loop
+    begin
+    select pay_method_id into v_payment_method_id
+    from payment_method_dimension
+    where pay_method_id=i.payment_method_id and pay_method_nm=i.payment_method_name;
+    exception 
+    when no_data_found then
+    insert into payment_method_dimension values(seq_payment_method.nextval,i.payment_method_id,i.payment_method_name,sysdate);
+    update src_created_dates set cr_dt=i.crt_date
+    where src_name='pay_method_src';
+    end;
+end loop;
+end;
+
+exec sp_payment;
+
+-----------------------------------------------------------------------------------------
+--calender_dimension
+create or replace procedure sp_calender as
+cursor c_calender is
+select trunc(sysdate,'yyyy') +level-1 as i_date
+from dual
+connect by level<=365;
+v_week number(5);
+v_month_nm varchar2(10);
+v_month_number number(2);
+v_year number(10);
+v_quarter number(2);
+v_date_id number(10);
+begin 
+for i in c_calender loop
+    begin 
+    select date_id into v_date_id
+    from calender_dimention
+    where dt=i.i_date;
+  
+    exception
+    when no_data_found then
+    v_week:=to_char(i.i_date,'w');
+    v_month_nm:=to_char(i.i_date,'month');
+    v_month_number:= to_char(i.i_date,'mm');
+    v_year:=to_char(i.i_date,'yyyy');
+    v_quarter:=to_char(i.i_date,'q');
+    insert into calender_dimention values(seq_date_id.nextval,i.i_date,v_week,v_month_nm,
+    v_month_number,v_year,v_quarter);
+    end;
+ end loop;
+ end;
+ 
+ exec sp_calender;
+-----------------------------------------------------------------------------------------
+--payment_fact
+create or replace procedure sp_pay_fact as
+cursor c_pay_fact is
+select payment_id,cust_sur_id,shop_sur_id,emp_sur_id,date_id,pay_method_code method_id,payment_amount , crt_date
+from payment_r p,dejune22_vijay.sales_transaction_fact pf,dejune22_vijay.payment_method_dimension pd,dejune22_vijay.calender_dimention c
+where p.sales_transaction_id=pf.src_transaction_id and pd.pay_method_code=p.payment_method_id and p.payment_date=c.dt 
+and pf.crnt_dt>(select cr_dt
+from dejune22_vijay.src_created_dates
+where src_name='pay_ft');
+v_pay_id number(10);
+
+begin
+for i in c_pay_fact loop
+    begin
+    select src_pay_id into v_pay_id
+    from dejune22_vijay.payment_fact
+    where src_pay_id=i.payment_id and cust_sur_id=i.cust_sur_id and shop_sur_id=i.shop_sur_id and emp_sur_id=i.emp_sur_id and pay_date_id=i.date_id;
+    
+    exception
+    when no_data_found then
+        insert into dejune22_vijay.payment_fact values(seq_pay_id.nextval,i.payment_id,i.cust_sur_id,i.shop_sur_id,i.emp_sur_id,i.date_id,i.method_id,i.payment_amount,sysdate);
+    update dejune22_vijay.src_created_dates set cr_dt=i.crt_date
+    where src_name='pay_ft';
+    end;
+end loop;
+end;
+
+exec sp_pay_fact;
